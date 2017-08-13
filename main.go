@@ -1,10 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -17,17 +20,38 @@ type user struct {
 	Last     string
 }
 
-var dbUsers = map[string]user{}      // user ID, user
-var dbSessions = map[string]string{} // session ID, user ID
+type session struct {
+	username     string
+	lastActivity time.Time
+}
+
+var dbUsers = map[string]user{}       // user ID, user struct
+var dbSessions = map[string]session{} // session ID, session
+var dbSessionsCleaned time.Time
+
+var db *sql.DB
+var err error
+
+const sessionLength int = 30
 
 func init() {
+	dbSessionsCleaned = time.Now()
+
+	// for testing only
 	bs, _ := bcrypt.GenerateFromPassword([]byte("123"), bcrypt.DefaultCost)
 	dbUsers["jimmy"] = user{"jimmy", bs, "jimmy", "xie"}
 }
 
+func check(err error) {
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
 //login function handler
 func login(w http.ResponseWriter, r *http.Request) {
-	if alreadyLoggedIn(r) {
+	if alreadyLoggedIn(w, r) {
+		fmt.Println(123123)
 		http.Error(w, http.StatusText(http.StatusSeeOther), http.StatusSeeOther)
 		return
 	}
@@ -48,11 +72,12 @@ func login(w http.ResponseWriter, r *http.Request) {
 
 	sID := uuid.NewV4()
 	c := &http.Cookie{
-		Name:  "session",
-		Value: sID.String(),
+		Name:   "session",
+		Value:  sID.String(),
+		MaxAge: sessionLength,
 	}
 	http.SetCookie(w, c)
-	dbSessions[c.Value] = username
+	dbSessions[c.Value] = session{username, time.Now()}
 	fmt.Println("cookie is ", c.Value)
 
 	w.WriteHeader(http.StatusOK)
@@ -60,7 +85,7 @@ func login(w http.ResponseWriter, r *http.Request) {
 
 //reg function handler
 func reg(w http.ResponseWriter, r *http.Request) {
-	if alreadyLoggedIn(r) {
+	if alreadyLoggedIn(w, r) {
 		//TODO change to properate message
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
@@ -81,11 +106,12 @@ func reg(w http.ResponseWriter, r *http.Request) {
 	// create session
 	sID := uuid.NewV4()
 	c := &http.Cookie{
-		Name:  "session",
-		Value: sID.String(),
+		Name:   "session",
+		Value:  sID.String(),
+		MaxAge: sessionLength,
 	}
 	http.SetCookie(w, c)
-	dbSessions[c.Value] = username
+	dbSessions[c.Value] = session{username, time.Now()}
 
 	bs, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -102,7 +128,7 @@ func reg(w http.ResponseWriter, r *http.Request) {
 
 //logout function handler
 func logout(w http.ResponseWriter, r *http.Request) {
-	if !alreadyLoggedIn(r) {
+	if !alreadyLoggedIn(w, r) {
 		fmt.Println("i'm hrere")
 		w.WriteHeader(http.StatusForbidden)
 		return
@@ -115,9 +141,40 @@ func logout(w http.ResponseWriter, r *http.Request) {
 		Value:  "",
 		MaxAge: -1,
 	}
-
 	http.SetCookie(w, c)
+
+	// clean up dbSessions
+	if time.Now().Sub(dbSessionsCleaned) > (time.Second * 30) {
+		go cleanSessions()
+	}
+
 	w.WriteHeader(http.StatusOK)
+}
+
+func cleanSessions() {
+	for k, v := range dbSessions {
+		if time.Now().Sub(v.lastActivity) >
+			(time.Second * time.Duration(sessionLength)) {
+			delete(dbSessions, k)
+		}
+	}
+	dbSessionsCleaned = time.Now()
+}
+
+func alreadyLoggedIn(w http.ResponseWriter, r *http.Request) bool {
+	c, err := r.Cookie("session")
+	if err != nil {
+		return false
+	}
+	session, ok := dbSessions[c.Value]
+	if ok {
+		session.lastActivity = time.Now()
+		dbSessions[c.Value] = session
+	}
+	_, ok = dbUsers[session.username]
+	c.MaxAge = sessionLength
+	http.SetCookie(w, c)
+	return ok
 }
 
 func getUser(w http.ResponseWriter, r *http.Request) user {
@@ -134,24 +191,21 @@ func getUser(w http.ResponseWriter, r *http.Request) user {
 
 	// if the user exists already, get user
 	var userinfo user
-	if username, ok := dbSessions[c.Value]; ok {
-		userinfo = dbUsers[username]
+	if session, ok := dbSessions[c.Value]; ok {
+		session.lastActivity = time.Now()
+		dbSessions[c.Value] = session
+		userinfo = dbUsers[session.username]
 	}
 	return userinfo
 }
 
-func alreadyLoggedIn(r *http.Request) bool {
-	c, err := r.Cookie("session")
-	if err != nil {
-		return false
-	}
-	username := dbSessions[c.Value]
-	_, ok := dbUsers[username]
-	fmt.Println("already logged in? ", ok)
-	return ok
-}
-
 func main() {
+	db, err = sql.Open("mysql", "root:yuki@tcp(localhost:3306)/userinfo?charset=utf8")
+	check(err)
+	defer db.Close()
+
+	err = db.Ping()
+	check(err)
 
 	r := mux.NewRouter().StrictSlash(true)
 
@@ -161,5 +215,5 @@ func main() {
 	r.HandleFunc("/logout", logout).Methods("GET")
 
 	// Bind to a port and pass our router in
-	log.Fatal(http.ListenAndServe(":8000", r))
+	log.Fatal(http.ListenAndServe(":8001", r))
 }
