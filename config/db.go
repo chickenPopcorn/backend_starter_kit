@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	. "../models"
+
+	"github.com/aws/aws-sdk-go/service/s3"
 	//mysql libary
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -13,6 +15,7 @@ import (
 type Env struct {
 	DB       *sql.DB
 	Sessions map[string]Session
+	S3       *s3.S3
 }
 
 //NewDB opens database
