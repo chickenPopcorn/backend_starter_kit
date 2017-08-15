@@ -2,20 +2,11 @@ package models
 
 import (
 	"database/sql"
-	"net/http"
 )
 
 //Session in server
 type Session struct {
 	Username string
-}
-
-//Datastore interface for DB
-type Datastore interface {
-	GetUserInfo(string) (*User, error)
-	Login(w http.ResponseWriter, r *http.Request)
-	Logout(w http.ResponseWriter, r *http.Request)
-	Reg(w http.ResponseWriter, r *http.Request)
 }
 
 //DB user defined wrapper

@@ -13,7 +13,7 @@ import (
 
 //Env used for code injection
 type Env struct {
-	Db       Datastore
+	Db       *sql.DB
 	Sessions map[string]Session
 }
 
